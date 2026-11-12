@@ -1,0 +1,70 @@
+name: Pipeline
+
+# The production schedule: every 30 minutes, ingest the live feeds, load the new
+# landing files, run the quality checks, and publish the dashboard only if they pass.
+#
+# The landing zone and warehouse persist between runs in the Actions cache: each run
+# restores the latest lake, appends to it and saves it under a new key. Raw data is
+# never committed to the repository.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["src/**", ".github/workflows/pipeline.yml"]
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false # never two writers on the same lake
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    outputs:
+      checks_passed: ${{ steps.pipeline.outcome == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e .
+      - name: Restore lake
+        uses: actions/cache/restore@v4
+        with:
+          path: lake
+          key: lake-${{ github.run_id }}
+          restore-keys: lake-
+      - name: Ingest, load, check, report
+        id: pipeline
+        run: velib run 2>&1 | tee run.log
+      - name: Save lake
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: lake
+          key: lake-${{ github.run_id }}
+      - name: Summary
+        if: always()
+        run: |
+          { echo "## Pipeline run"; echo '```'; cat run.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: run
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
