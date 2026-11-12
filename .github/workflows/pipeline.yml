@@ -41,6 +41,8 @@ jobs:
           restore-keys: lake-
       - name: Ingest, load, check, report
         id: pipeline
+        # Explicit bash enables pipefail: without it, `| tee` would hide a failed check.
+        shell: bash
         run: velib run 2>&1 | tee run.log
       - name: Save lake
         if: always()
